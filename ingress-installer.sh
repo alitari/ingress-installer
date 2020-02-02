@@ -75,12 +75,12 @@ function create_ingress() {
     local name=$1
     local host=$2
     local service=$3
-    local annotation="${4:-}"
-    local path="${5:-/}"
-    local port="${6:-80}"
+    local port="${4:-80}"
+    local annotation="${5:-}"
+    local path="${6:-/}"
 
     # | kubectl apply -f -
-    cat <<EOF
+    cat <<EOF | kubectl apply -f -
 apiVersion: extensions/v1beta1
 kind: Ingress
 metadata:
@@ -125,7 +125,7 @@ OPTIONS=(1 "install ingress controller"
          4 "uninstall cert-manager"
          5 "install cert issuer"
          6 "uninstall cert issuer"
-         7 "test"
+         7 "install non-secure ingress with nip.io domain"
          9 "list installations"
          r "reload")
 
@@ -188,14 +188,33 @@ case $CHOICE in
         7)
             echo "install non-secure ingress..."
             # create namespace list
-            
-
+            namespaceList=$(kubectl get ns --field-selector=status.phase=Active --no-headers=true -o=custom-columns=NAME:.metadata.name | awk '{print v++,$1}')
             # menu select namespace
-            # menu select service
-
-            create_ingress "name" "host" "service"
-            sleep 5
-
+            number=$(dialog --clear --menu "Select namespace" 30 80 25 $namespaceList 3>&1 1>&2 2>&3)
+            if [[ ! -z "$number" ]]; then
+              namespaceArr=($namespaceList)
+              namespace=${namespaceArr[$(( $number*2 + 1))]}
+              kubectl ns "$namespace"
+              if [ "$?" -eq "0" ]; then
+                # menu select service
+                serviceList=$(kubectl get svc --no-headers=true -o=custom-columns=NAME:.metadata.name | awk '{print v++,$1}')
+                serviceArr=($serviceList)
+                if [[ "${#serviceArr[@]}" -eq 0 ]];then 
+                  echo "ABORT: found no services in namespace '$namespace'"
+                  sleep 5
+                else 
+                  number=$(dialog --clear --menu "Select service" 30 80 25 $serviceList 3>&1 1>&2 2>&3)
+                  if [[ ! -z "$number" ]]; then
+                    service=${serviceArr[$(( $number*2 + 1))]}
+                    host="${service}.${CLUSTER_EXT_IP}.nip.io"
+                    port=$(kubectl get svc $service --no-headers=true -o=custom-columns=PORT:.spec.ports[0].port)
+                    echo "host: $host, service: $service, port: $port "
+                    create_ingress "$service" "$host" "$service" "$port"
+                    sleep 5
+                  fi
+                fi
+              fi
+            fi
             ;;
 
         9)
