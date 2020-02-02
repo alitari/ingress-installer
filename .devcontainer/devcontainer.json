@@ -1,0 +1,17 @@
+{
+	"name": "k8s-tools",
+	"dockerFile": "Dockerfile",
+	"appPort": [
+		8001
+	],
+	"runArgs": [
+		"-e",
+		"TZ=Europe/Amsterdam"
+	],
+	"extensions": [
+		"ms-kubernetes-tools.vscode-kubernetes-tools",
+		"ms-azuretools.vscode-docker"
+	],
+	"settings": {},
+	"postCreateCommand": ". /workspaces/ionos-managed-k8s/init-helm.sh"
+}
