@@ -1,5 +1,21 @@
 #!/bin/bash
 
+function domain_to_cluster() {
+  local domain=$1
+  local ip=$(dig +short $domain @resolver1.opendns.com)
+  if [ "$ip" == "$CLUSTER_EXT_IP" ]; then
+    echo "\Z2[X]\Zn"
+  else 
+    echo "[ ]"
+  fi
+}
+
+function exe() {
+  local cmd=$1
+  local res=$(printf %q "$($cmd)")
+  echo $res | cut -d "'" -f2
+}
+
 function res_exists() {
   local namespace=$1
   local resource=$2
@@ -104,7 +120,7 @@ EOF
 EMAIL_REGEXP="^([A-Za-z]+[A-Za-z0-9]*((\.|\-|\_)?[A-Za-z]+[A-Za-z0-9]*){1,})@(([A-Za-z]+[A-Za-z0-9]*)+((\.|\-|\_)?([A-Za-z]+[A-Za-z0-9]*)+){1,})+\.([A-Za-z]{2,})+$"
 
 HEIGHT=30
-WIDTH=120
+WIDTH=140
 CHOICE_HEIGHT=20
 BACKTITLE="Ingress Installer"
 TITLE="Ingress Installer"
@@ -218,12 +234,13 @@ case $CHOICE in
             ;;
 
         9)
-            echo "list installations"
-            CONTENT="installations: \n=================\n\
-$(helm list --all-namespaces --short)\n\n\
-ingresses:\n==============\n\
-$(kubectl get ingress --all-namespaces --no-headers=true --ignore-not-found -ocustom-columns=NAME:metadata.name,HOST:spec.rules[0].host,BACKEND:spec.rules[0].http.paths[0].backend.serviceName)\n\n"
-            dialog --title 'list installations' --msgbox "$CONTENT" $HEIGHT $WIDTH
+            INGRESSES=$(kubectl get ingress --all-namespaces --no-headers=true --ignore-not-found -ocustom-columns=NAME:metadata.name,HOST:spec.rules[0].host,BACKEND:spec.rules[0].http.paths[0].backend.serviceName \
+| while read line ; do \
+    read -r -a cols <<< "$line"; \
+    dtc=$(domain_to_cluster "${cols[1]}");
+    echo "$dtc ${line}\n"; \
+ done ;)
+            dialog --title 'ingresses'  --colors --clear --msgbox "$INGRESSES" $HEIGHT $WIDTH
             ;;
         r)
             ;;

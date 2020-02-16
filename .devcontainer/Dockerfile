@@ -17,6 +17,7 @@ RUN apt-get update && \
   gettext-base \
   jq \
   dialog \
+  dnsutils \
   && locale-gen en_US.UTF-8
 
 # Switch back to dialog for any ad-hoc use of apt-get
