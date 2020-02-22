@@ -201,10 +201,10 @@ OPTIONS=(1 "install ingress controller"
          3 "install cert-manager"
          4 "uninstall cert-manager"
          5 "install cert issuer"
-         6 "uninstall cert issuer"
          7 "install non-secure ingress with nip.io domain"
          8 "install tls ingress"
-         9 "show ingresses"
+         s "show issuers"
+         g "show ingresses"
          r "reload")
 
 CHOICE=$(dialog --colors --clear \
@@ -262,10 +262,6 @@ case $CHOICE in
               fi
             fi
             ;;
-
-        6)
-            kubectl delete clusterissuer "issuer"
-            ;;
         7)
             select_service
             HOST="${SERVICE}.${CLUSTER_EXT_IP}.nip.io"
@@ -285,7 +281,11 @@ case $CHOICE in
             fi
             sleep 5
             ;;
-        9)
+        s)
+            ISSUERS=$(kubectl get issuer --all-namespaces --ignore-not-found )
+            dialog --title 'issuers'  --colors --clear --msgbox "$ISSUERS" $HEIGHT $WIDTH
+            ;;
+        g)
             INGRESSES=$(kubectl get ingress --all-namespaces --no-headers=true --ignore-not-found -ocustom-columns=NAME:metadata.name,HOST:spec.rules[0].host,BACKEND:spec.rules[0].http.paths[0].backend.serviceName \
 | while read line ; do \
     read -r -a cols <<< "$line"; \
