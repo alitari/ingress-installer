@@ -10,10 +10,40 @@ function domain_to_cluster() {
   fi
 }
 
-function exe() {
-  local cmd=$1
-  local res=$(printf %q "$($cmd)")
-  echo $res | cut -d "'" -f2
+function select_ns() {
+  local namespaceList=$(kubectl get ns --field-selector=status.phase=Active --no-headers=true -o=custom-columns=NAME:.metadata.name | awk '{print v++,$1}')
+  # menu select namespace
+  local number=$(dialog --clear --menu "Select namespace" 30 80 25 $namespaceList 3>&1 1>&2 2>&3)
+  if [[ ! -z "$number" ]]; then
+    local namespaceArr=($namespaceList)
+    local namespace=${namespaceArr[$(( $number*2 + 1))]}
+    kubectl ns "$namespace"
+  fi
+}
+
+function select_service() {
+  local namespaceList=$(kubectl get ns --field-selector=status.phase=Active --no-headers=true -o=custom-columns=NAME:.metadata.name | awk '{print v++,$1}')
+  # menu select namespace
+  local number=$(dialog --clear --menu "Select namespace" 30 80 25 $namespaceList 3>&1 1>&2 2>&3)
+  if [[ ! -z "$number" ]]; then
+    local namespaceArr=($namespaceList)
+    local namespace=${namespaceArr[$(( $number*2 + 1))]}
+    kubectl ns "$namespace"
+    if [ "$?" -eq "0" ]; then
+      # menu select service
+      local serviceList=$(kubectl get svc --no-headers=true -o=custom-columns=NAME:.metadata.name | awk '{print v++,$1}')
+      local serviceArr=($serviceList)
+      if [[ "${#serviceArr[@]}" -eq 0 ]];then 
+        echo "ABORT: found no services in namespace '$namespace'"
+        sleep 5
+      else 
+        number=$(dialog --clear --menu "Select service" 30 80 25 $serviceList 3>&1 1>&2 2>&3)
+        if [[ ! -z "$number" ]]; then
+          SERVICE=${serviceArr[$(( $number*2 + 1))]}
+        fi
+      fi
+    fi
+  fi
 }
 
 function res_exists() {
@@ -94,8 +124,6 @@ function create_ingress() {
     local port="${4:-80}"
     local annotation="${5:-}"
     local path="${6:-/}"
-
-    # | kubectl apply -f -
     cat <<EOF | kubectl apply -f -
 apiVersion: extensions/v1beta1
 kind: Ingress
@@ -116,8 +144,40 @@ spec:
 EOF
 }
 
+function create_tls_ingress() {
+    local name=$1
+    local host=$2
+    local service=$3
+    local port="${4:-80}"
+    local annotation="${5:-}"
+    local path="${6:-/}"
+    cat <<EOF | kubectl apply -f -
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: $name
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    cert-manager.io/issuer: "issuer"
+    $annotation
+spec:
+  tls:
+    - hosts:
+        - $host
+      secretName: ${service}-tls
+  rules:
+    - host: $host
+      http:
+        paths:
+          - path: $path
+            backend:
+              serviceName: $service
+              servicePort: $port
+EOF
+}
 
 EMAIL_REGEXP="^([A-Za-z]+[A-Za-z0-9]*((\.|\-|\_)?[A-Za-z]+[A-Za-z0-9]*){1,})@(([A-Za-z]+[A-Za-z0-9]*)+((\.|\-|\_)?([A-Za-z]+[A-Za-z0-9]*)+){1,})+\.([A-Za-z]{2,})+$"
+HOST_REGEXP="^(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]*[a-zA-Z0-9])\.)*([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9\-]*[A-Za-z0-9])$"
 
 HEIGHT=30
 WIDTH=140
@@ -125,16 +185,17 @@ CHOICE_HEIGHT=20
 BACKTITLE="Ingress Installer"
 TITLE="Ingress Installer"
 
+NAMESPACE_IGHR_CTRL="ingress-controller"
+NAMESPACE_CERT_MGR="cert-manager"
+
 for (( ; ; ))
 do
 
-CLUSTER_EXT_IP=$(kubectl -n ingress-controller get svc nginx-ingress-controller -ojson --ignore-not-found | jq -r .status.loadBalancer.ingress[0].ip)
-IGHR_CTRL=$(res_exists "ingress-controller" "pod" "-l app=nginx-ingress,component=controller --field-selector=status.phase=Running")
-CERT_MGR=$(res_exists "ingress-controller" "pod" "-l app=cert-manager")
-CERT_ISS=$(res_exists "ingress-controller" "issuers.cert-manager.io" "issuer")
-MENU="ingress-controller: $IGHR_CTRL (ingress-ip: $CLUSTER_EXT_IP) , cert-manager: $CERT_MGR , cert-issuer: $CERT_ISS \n
-  ingresses: $(kubectl get ingress --all-namespaces --no-headers=true | wc -l)\n\
-  Select option:"
+CLUSTER_EXT_IP=$(kubectl -n $NAMESPACE_IGHR_CTRL get svc nginx-ingress-controller -ojson --ignore-not-found | jq -r .status.loadBalancer.ingress[0].ip)
+IGHR_CTRL=$(res_exists "$NAMESPACE_IGHR_CTRL" "pod" "-l app=nginx-ingress,component=controller --field-selector=status.phase=Running")
+CERT_MGR=$(res_exists "$NAMESPACE_CERT_MGR" "pod" "-l app=cert-manager")
+MENU="ingress-controller: $IGHR_CTRL (ingress-ip: $CLUSTER_EXT_IP) , cert-manager: $CERT_MGR \n   Select option:"
+
 OPTIONS=(1 "install ingress controller"
          2 "uninstall ingress controller"
          3 "install cert-manager"
@@ -142,7 +203,8 @@ OPTIONS=(1 "install ingress controller"
          5 "install cert issuer"
          6 "uninstall cert issuer"
          7 "install non-secure ingress with nip.io domain"
-         9 "list installations"
+         8 "install tls ingress"
+         9 "show ingresses"
          r "reload")
 
 CHOICE=$(dialog --colors --clear \
@@ -161,36 +223,40 @@ case $CHOICE in
             ;;
 
         1)
-            echo "install ingress controller..."
-            helm_install "stable https://kubernetes-charts.storage.googleapis.com" "ingress-controller" "nginx-ingress" "stable/nginx-ingress" ""
-            wait_res_exists "ingress-controller" "pod" "-l app=nginx-ingress,component=controller --field-selector=status.phase=Running" "\Z2[X]\Zn"
+            helm_install "stable https://kubernetes-charts.storage.googleapis.com" "$NAMESPACE_IGHR_CTRL" "nginx-ingress" "stable/nginx-ingress" ""
+            # wait_res_exists "$NAMESPACE_IGHR_CTRL" "pod" "-l app=nginx-ingress,component=controller --field-selector=status.phase=Running" "\Z2[X]\Zn"
             ;;
         2)
-            echo "uninstall ingress controller..."
-            kubectl ns "ingress-controller"
+            kubectl ns "$NAMESPACE_IGHR_CTRL"
             helm delete "nginx-ingress"
-            wait_res_exists "ingress-controller" "pod" "-l app=nginx-ingress,component=controller --field-selector=status.phase=Running" "[ ]"
+            # wait_res_exists "$NAMESPACE_IGHR_CTRL" "pod" "-l app=nginx-ingress,component=controller --field-selector=status.phase=Running" "[ ]"
+            kubectl delete ns "$NAMESPACE_IGHR_CTRL"
             ;;
         3)
-            echo "install cert-manager..."
             kubectl apply --validate=false -f https://raw.githubusercontent.com/jetstack/cert-manager/release-0.11/deploy/manifests/00-crds.yaml
-            helm_install "helm repo add jetstack https://charts.jetstack.io" "ingress-controller" "cert-manager" "jetstack/cert-manager" ""
+            helm_install "jetstack https://charts.jetstack.io" "$NAMESPACE_CERT_MGR" "cert-manager" "jetstack/cert-manager" ""
             ;;
         4)
-            echo "uninstall cert-manager..."
+            kubectl ns "$NAMESPACE_CERT_MGR"
             kubectl delete -f https://raw.githubusercontent.com/jetstack/cert-manager/release-0.11/deploy/manifests/00-crds.yaml
             helm delete "cert-manager"
+            kubectl delete ns "$NAMESPACE_CERT_MGR"
+            kubectl delete clusterrole -l app.kubernetes.io/instance=cert-manager
+            kubectl delete clusterrolebindings -l app.kubernetes.io/instance=cert-manager
+            kubectl -n kube-system delete role -l app.kubernetes.io/instance=cert-manager
+            kubectl -n kube-system delete rolebinding -l app.kubernetes.io/instance=cert-manager
+            kubectl delete mutatingwebhookconfiguration -l app.kubernetes.io/instance=cert-manager
+            kubectl delete validatingwebhookconfiguration -l app.kubernetes.io/instance=cert-manager
             ;;
         5)
             clear
-            echo "install cert issuer..."
-            kubectl ns "ingress-controller"
             issuerServer=$(dialog --clear --menu "Issuer server" 9 80 5 "https://acme-staging-v02.api.letsencrypt.org/directory" "(staging - letsencrypt)" "https://acme-v02.api.letsencrypt.org/directory" "(prod - letsencrypt)" 3>&1 1>&2 2>&3)
             if [[ ! -z "$issuerServer" ]]; then
               email=$(dialog --clear --title "Issuer notification email" --inputbox "Email" 8 60 "" 3>&1 1>&2 2>&3)
               if [[ ! $email =~ ${EMAIL_REGEXP} ]]; then
                 echo "invalid email: '$email'"
               else 
+                select_ns
                 create_issuer "issuer" $issuerServer $email
                 sleep 5
               fi
@@ -198,41 +264,27 @@ case $CHOICE in
             ;;
 
         6)
-            echo "uninstall cert issuer..."
-            kubectl delete issuers.cert-manager.io "issuer"
+            kubectl delete clusterissuer "issuer"
             ;;
         7)
-            echo "install non-secure ingress..."
-            # create namespace list
-            namespaceList=$(kubectl get ns --field-selector=status.phase=Active --no-headers=true -o=custom-columns=NAME:.metadata.name | awk '{print v++,$1}')
-            # menu select namespace
-            number=$(dialog --clear --menu "Select namespace" 30 80 25 $namespaceList 3>&1 1>&2 2>&3)
-            if [[ ! -z "$number" ]]; then
-              namespaceArr=($namespaceList)
-              namespace=${namespaceArr[$(( $number*2 + 1))]}
-              kubectl ns "$namespace"
-              if [ "$?" -eq "0" ]; then
-                # menu select service
-                serviceList=$(kubectl get svc --no-headers=true -o=custom-columns=NAME:.metadata.name | awk '{print v++,$1}')
-                serviceArr=($serviceList)
-                if [[ "${#serviceArr[@]}" -eq 0 ]];then 
-                  echo "ABORT: found no services in namespace '$namespace'"
-                  sleep 5
-                else 
-                  number=$(dialog --clear --menu "Select service" 30 80 25 $serviceList 3>&1 1>&2 2>&3)
-                  if [[ ! -z "$number" ]]; then
-                    service=${serviceArr[$(( $number*2 + 1))]}
-                    host="${service}.${CLUSTER_EXT_IP}.nip.io"
-                    port=$(kubectl get svc $service --no-headers=true -o=custom-columns=PORT:.spec.ports[0].port)
-                    echo "host: $host, service: $service, port: $port "
-                    create_ingress "$service" "$host" "$service" "$port"
-                    sleep 5
-                  fi
-                fi
-              fi
-            fi
+            select_service
+            HOST="${SERVICE}.${CLUSTER_EXT_IP}.nip.io"
+            PORT=$(kubectl get svc $SERVICE --no-headers=true -o=custom-columns=PORT:.spec.ports[0].port)
+            echo "host: $HOST, service: $SERVICE, port: $PORT"
+            create_ingress "$SERVICE" "$HOST" "$SERVICE" "$PORT"
+            sleep 5
             ;;
-
+        8)
+            select_service
+            PORT=$(kubectl get svc $SERVICE --no-headers=true -o=custom-columns=PORT:.spec.ports[0].port)
+            HOST=$(dialog --clear --title "Host" --inputbox "Host" 8 60 "" 3>&1 1>&2 2>&3)
+            if [[ ! $HOST =~ ${HOST_REGEXP} ]]; then
+              echo "invalid host name: '$HOST'"
+            else 
+              create_tls_ingress "$SERVICE" "$HOST" "$SERVICE" "$PORT"
+            fi
+            sleep 5
+            ;;
         9)
             INGRESSES=$(kubectl get ingress --all-namespaces --no-headers=true --ignore-not-found -ocustom-columns=NAME:metadata.name,HOST:spec.rules[0].host,BACKEND:spec.rules[0].http.paths[0].backend.serviceName \
 | while read line ; do \
