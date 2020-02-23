@@ -4,7 +4,7 @@
 ## run
 
 ```bash
-docker run --rm -v ~/.kube:/home/alitari/.kube/ -it ingress-installer
+docker run --rm -v ~/.kube:/home/alitari/.kube/ -it alitari/ingress-installer
 ```
 
 
