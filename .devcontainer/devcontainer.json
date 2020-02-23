@@ -1,6 +1,6 @@
 {
 	"name": "k8s-tools",
-	"dockerFile": "Dockerfile",
+	"dockerFile": "../Dockerfile",
 	"appPort": [
 		8001
 	],

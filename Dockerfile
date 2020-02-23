@@ -45,7 +45,7 @@ RUN curl -LO https://storage.googleapis.com/kubernetes-release/release/v1.16.0/b
 
 # cluster config
 RUN mkdir /home/alitari/.kube
-ADD config /home/alitari/.kube/
+ADD .devcontainer/config /home/alitari/.kube/
 RUN chmod 777 -R /home/alitari/.kube
 
 # helm
@@ -60,6 +60,9 @@ RUN curl -LO https://get.helm.sh/helm-v3.0.2-linux-amd64.tar.gz \
 # set home
 ENV HOME /home/$USER_NAME
 
+ADD ingress-installer.sh /
+RUN chmod +x /ingress-installer.sh
+CMD /ingress-installer.sh
 
 # the user we're applying this too (otherwise it most likely install for root)
 USER $USER_NAME
@@ -80,4 +83,4 @@ RUN kubectl krew install ns
 RUN curl -sfL https://get.rio.io | sh -
 
 # bash configuration
-ADD .bashrc /home/alitari
+ADD .devcontainer/.bashrc /home/alitari
