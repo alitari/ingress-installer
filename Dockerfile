@@ -45,7 +45,7 @@ RUN curl -LO https://storage.googleapis.com/kubernetes-release/release/v1.16.0/b
 
 # cluster config
 RUN mkdir /home/alitari/.kube
-ADD .devcontainer/config /home/alitari/.kube/
+# ADD .devcontainer/config /home/alitari/.kube/
 RUN chmod 777 -R /home/alitari/.kube
 
 # helm
